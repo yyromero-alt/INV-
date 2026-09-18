@@ -326,6 +326,7 @@ tr:hover td{background:var(--paper);}
 
       <div class="panel" id="salidaForm" style="display:none;">
         <h2>Confirmar salida de <span id="salidaSerialTag" class="loc-tag"></span></h2>
+        <div id="salidaTotalResumen" class="hint" style="font-size:13px;font-weight:700;margin:0 0 14px;">Total remisión: 0 unidades</div>
         <div class="grid">
           <div class="field">
             <label for="out-destino">Destino / cliente *</label>
@@ -405,7 +406,7 @@ tr:hover td{background:var(--paper);}
         <table>
           <thead><tr>
             <th class="mono-col">Serial</th><th class="mono-col">Referencia</th><th>Última ubicación</th>
-            <th>Unidades</th><th>Destino</th><th>Documento</th><th>Fecha salida</th><th>Remisión</th>
+            <th>Unidades</th><th>Destino</th><th>Documento</th><th>Total remisión</th><th>Fecha salida</th><th>Remisión</th>
           </tr></thead>
           <tbody id="tblHistorial"><tr class="empty-row"><td colspan="8">Cargando...</td></tr></tbody>
         </table>
@@ -746,14 +747,17 @@ document.getElementById('btnConfirmarReubicacion').addEventListener('click', asy
 let salidaTargets = [], remisionActual = null;
 function imprimirRemision(){
   if(!remisionActual)return;
-  const fecha=new Date().toLocaleString('es-CO'), filas=remisionActual.productos.map((p,i)=>`<tr><td>${i+1}</td><td>${escapeHtml(p.serial||'SIN SERIAL')}</td><td>${escapeHtml(p.referencia||'')}</td><td>${escapeHtml(p.descripcion||'')}</td><td>${escapeHtml(ubicacionTexto(p)||'—')}</td><td>${escapeHtml(p.unidades||p.cantidadSalida||p.cantidad||1)}</td></tr>`).join('');
+  const fecha=new Date().toLocaleString('es-CO');
+  const totalUnidades = Number(remisionActual.totalUnidades) || remisionActual.productos.reduce((sum,p)=>sum + (Number(p.unidades)||Number(p.cantidadSalida)||Number(p.cantidad)||1),0);
+  const filas=remisionActual.productos.map((p,i)=>`<tr><td>${i+1}</td><td>${escapeHtml(p.serial||'SIN SERIAL')}</td><td>${escapeHtml(p.referencia||'')}</td><td>${escapeHtml(p.descripcion||'')}</td><td>${escapeHtml(ubicacionTexto(p)||'—')}</td><td>${escapeHtml(p.unidades||p.cantidadSalida||p.cantidad||1)}</td></tr>`).join('');
   const w=window.open('','_blank','width=950,height=750');
-  w.document.write(`<!doctype html><html lang="es"><head><meta charset="utf-8"><title>Remisión ${escapeHtml(remisionActual.documento||'')}</title><style>body{font-family:Arial;color:#111;margin:35px}h1{text-align:center;font-size:24px}h2{font-size:16px;border-bottom:1px solid #222;padding-bottom:6px}.head{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:20px 0}.line{border-bottom:1px solid #aaa;min-height:25px}table{width:100%;border-collapse:collapse;margin-top:15px}th,td{border:1px solid #777;padding:8px;font-size:12px}th{background:#eee}.firmas{display:grid;grid-template-columns:1fr 1fr;gap:80px;margin-top:100px}.firma{border-top:1px solid #111;padding-top:8px;min-height:65px}.small{font-size:12px}.pdf-actions{text-align:center;margin:22px 0}@media print{.pdf-actions{display:none}}button{background:#1d4ed8;color:#fff;border:0;border-radius:5px;padding:10px 18px;font-weight:700;cursor:pointer}<\/style></head><body><h1>REMISIÓN DE PRODUCTOS</h1><div class="head"><div><b>Documento:</b> ${escapeHtml(remisionActual.documento||'—')}</div><div><b>Fecha de salida:</b> ${fecha}</div><div><b>Destino / cliente:</b> ${escapeHtml(remisionActual.destino)}</div><div><b>Observaciones:</b> ${escapeHtml(remisionActual.observaciones||'—')}</div></div><h2>Detalle de la salida</h2><table><thead><tr><th>#</th><th>Serial</th><th>Referencia</th><th>Descripción</th><th>Ubicación</th><th>Unidades</th></tr></thead><tbody>${filas}</tbody></table><div class="firmas"><div><div class="firma"><b>RECIBE A CONFORMIDAD</b><br><br>Nombre: ___________________________________<br>CC: ______________________________________<br>Fecha: ____________________________________</div></div><div><div class="firma"><b>RESPONSABLE IMC</b><br><br>Nombre: ___________________________________<br>Cargo: ____________________________________<br>Firma: ____________________________________</div></div></div><p class="small">Documento generado por WMS Control por Serial.</p><div class="pdf-actions"><button onclick="window.print()">Imprimir / Guardar como PDF</button></div><\/body><\/html>`);w.document.close();
+  w.document.write(`<!doctype html><html lang="es"><head><meta charset="utf-8"><title>Remisión ${escapeHtml(remisionActual.documento||'')}</title><style>body{font-family:Arial;color:#111;margin:35px}h1{text-align:center;font-size:24px}h2{font-size:16px;border-bottom:1px solid #222;padding-bottom:6px}.head{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:20px 0}.line{border-bottom:1px solid #aaa;min-height:25px}table{width:100%;border-collapse:collapse;margin-top:15px}th,td{border:1px solid #777;padding:8px;font-size:12px}th{background:#eee}.firmas{display:grid;grid-template-columns:1fr 1fr;gap:80px;margin-top:100px}.firma{border-top:1px solid #111;padding-top:8px;min-height:65px}.small{font-size:12px}.pdf-actions{text-align:center;margin:22px 0}@media print{.pdf-actions{display:none}}button{background:#1d4ed8;color:#fff;border:0;border-radius:5px;padding:10px 18px;font-weight:700;cursor:pointer}<\/style></head><body><h1>REMISIÓN DE PRODUCTOS</h1><div class="head"><div><b>Documento:</b> ${escapeHtml(remisionActual.documento||'—')}</div><div><b>Fecha de salida:</b> ${fecha}</div><div><b>Destino / cliente:</b> ${escapeHtml(remisionActual.destino)}</div><div><b>Observaciones:</b> ${escapeHtml(remisionActual.observaciones||'—')}</div></div><h2>Detalle de la salida</h2><table><thead><tr><th>#</th><th>Serial</th><th>Referencia</th><th>Descripción</th><th>Ubicación</th><th>Unidades</th></tr></thead><tbody>${filas}</tbody><tfoot><tr><td colspan="5" style="text-align:right;font-weight:700">TOTAL REMISIÓN</td><td style="font-weight:700">${totalUnidades}</td></tr></tfoot></table><div class="firmas"><div><div class="firma"><b>RECIBE A CONFORMIDAD</b><br><br>Nombre: ___________________________________<br>CC: ______________________________________<br>Fecha: ____________________________________</div></div><div><div class="firma"><b>RESPONSABLE IMC</b><br><br>Nombre: ___________________________________<br>Cargo: ____________________________________<br>Firma: ____________________________________</div></div></div><p class="small">Documento generado por WMS Control por Serial.</p><div class="pdf-actions"><button onclick="window.print()">Imprimir / Guardar como PDF</button></div><\/body><\/html>`);w.document.close();
 }
 document.getElementById('btnGenerarRemision').addEventListener('click',imprimirRemision);
 function imprimirRemisionDatos(remision){
   const anterior=remisionActual;
-  remisionActual=remision;
+  const totalUnidades = Number(remision.totalUnidades) || (remision.productos||[]).reduce((sum,p)=>sum+(Number(p.unidades)||Number(p.cantidadSalida)||Number(p.cantidad)||1),0);
+  remisionActual={...remision,totalUnidades};
   imprimirRemision();
   remisionActual=anterior;
 }
@@ -763,7 +767,10 @@ function serialesEntrada(){
 function escapeHtml(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));}
 function actualizarSeleccion(){
   salidaTargets = [...document.querySelectorAll('.salida-check:checked')].map(c=>{const p=JSON.parse(c.dataset.producto);const q=c.closest('.result-card').querySelector('.salida-cantidad');const max=Number(p.cantidad)>0?Number(p.cantidad):1; p.cantidadSalida=q?Math.min(max,Math.max(1,parseInt(q.value,10)||1)):max; return p});
-  document.getElementById('salidaSerialTag').textContent = salidaTargets.length ? salidaTargets.length+' serial(es) seleccionado(s)' : '';
+  document.getElementById('salidaSerialTag').textContent = salidaTargets.length ? salidaTargets.length+' línea(s) seleccionada(s)' : '';
+  const totalSalida = salidaTargets.reduce((sum,p)=>sum + (Number(p.cantidadSalida)||Number(p.cantidad)||1), 0);
+  const totalEl = document.getElementById('salidaTotalResumen');
+  if(totalEl) totalEl.textContent = salidaTargets.length ? 'Total remisión: ' + totalSalida + ' unidad(es)' : 'Total remisión: 0 unidades';
   document.getElementById('salidaForm').style.display = salidaTargets.length ? 'block' : 'none';
 }
 async function buscarParaSalida(){
@@ -808,7 +815,8 @@ document.getElementById('btnConfirmarSalida').addEventListener('click', async ()
       }
       r={mensaje:'Salida(s) procesada(s) correctamente.'};
     }
-    remisionActual={productos:salidaTargets.map(p=>({...p,unidades:p.serial?(Number(p.cantidad)||1):(Number(p.cantidadSalida)||1)})),destino,documento,observaciones};document.getElementById('btnGenerarRemision').style.display='inline-block';showMsg('msgSalida',r.mensaje||'Salidas generadas correctamente. Puedes imprimir la remisión.','ok'); document.getElementById('salidaForm').style.display='block';document.getElementById('salidaResult').innerHTML='';document.getElementById('salidaSearch').value='';['out-destino','out-doc','out-obs'].forEach(id=>document.getElementById(id).value='');salidaTargets=[];renderUltimos(true);
+    const productosSalidaRemision=salidaTargets.map(p=>({...p,unidades:p.serial?(Number(p.cantidad)||1):(Number(p.cantidadSalida)||1)}));
+    remisionActual={productos:productosSalidaRemision,destino,documento,observaciones,totalUnidades:productosSalidaRemision.reduce((sum,p)=>sum+(Number(p.unidades)||1),0)};document.getElementById('btnGenerarRemision').style.display='inline-block';showMsg('msgSalida',r.mensaje||'Salidas generadas correctamente. Puedes imprimir la remisión.','ok'); document.getElementById('salidaForm').style.display='block';document.getElementById('salidaResult').innerHTML='';document.getElementById('salidaSearch').value='';['out-destino','out-doc','out-obs'].forEach(id=>document.getElementById(id).value='');salidaTargets=[];renderUltimos(true);
   }catch(err){showMsg('msgSalida',err.message,'err')}finally{setBusy('spinSalida',['btnConfirmarSalida','btnCancelarSalida'],false)}
 });
 document.getElementById('btnCancelarSalida').addEventListener('click',()=>{document.getElementById('salidaForm').style.display='none';salidaTargets=[]});
@@ -1041,9 +1049,15 @@ function pintarHistorial(){
   );
   list = list.sort((a,b)=> new Date(b.fechaSalida) - new Date(a.fechaSalida));
 
+  const totalPorRemision = new Map();
+  historialCache.forEach(p=>{
+    const clave = (p.documento||'').toUpperCase() + '|' + (p.destino||'').toUpperCase();
+    totalPorRemision.set(clave, (totalPorRemision.get(clave)||0) + (Number(p.cantidad)||1));
+  });
+
   const tbody = document.getElementById('tblHistorial');
   if(!list.length){
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="8">Todavía no se han generado salidas.</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="9">Todavía no se han generado salidas.</td></tr>';
     return;
   }
   tbody.innerHTML = list.map(p=>`
@@ -1054,6 +1068,7 @@ function pintarHistorial(){
       <td>${p.cantidad || 1}</td>
       <td>${escapeHtml(p.destino||'—')}</td>
       <td class="mono">${escapeHtml(p.documento||'—')}</td>
+      <td><b>${totalPorRemision.get((p.documento||'').toUpperCase()+'|'+(p.destino||'').toUpperCase()) || (Number(p.cantidad)||1)}</b></td>
       <td>${fmtDate(p.fechaSalida)}</td>
       <td><button class="ghost small btn-reimprimir-hist" data-historial-index="${historialCache.indexOf(p)}" type="button">Imprimir</button></td>
     </tr>`).join('');
@@ -1065,7 +1080,8 @@ function imprimirRemisionHistorial(indice){
     serial:p.serial, referencia:p.referencia, descripcion:'', unidades:p.cantidad||1,
     cantidad:p.cantidad||1, cantidadSalida:p.cantidad||1, zona:p.ubicacionSalida||'', pasillo:'', nivel:''
   }));
-  imprimirRemisionDatos({productos,destino:fila.destino,documento:fila.documento,observaciones:productos.length>1?'Reimpresión de remisión':'',});
+  const totalUnidades = productos.reduce((sum,p)=>sum+(Number(p.unidades)||1),0);
+  imprimirRemisionDatos({productos,destino:fila.destino,documento:fila.documento,observaciones:productos.length>1?'Reimpresión de remisión':'',totalUnidades});
 }
 document.getElementById('tblHistorial').addEventListener('click',e=>{
   const btn=e.target.closest('.btn-reimprimir-hist');
