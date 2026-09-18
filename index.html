@@ -309,11 +309,11 @@ tr:hover td{background:var(--paper);}
     <!-- SALIDA -->
     <section class="view" id="view-salida">
       <h1>Salida de producto</h1>
-      <p class="sub">Busca uno o varios seriales y genera una sola salida con el mismo destino y documento.</p>
+      <p class="sub">Busca uno o varios productos y genera una sola salida con el mismo destino y documento.</p>
       <div class="panel">
         <h2>Buscar seriales</h2>
         <div class="field full">
-          <label for="salidaSearch">Seriales (uno por línea, separados por coma o espacio)</label>
+          <label for="salidaSearch">Seriales o referencias (uno por línea, separados por coma o espacio)</label>
           <textarea id="salidaSearch" class="mono" rows="4" placeholder="SN001\nSN002\nSN003" autocomplete="off"></textarea>
         </div>
         <div class="actions">
@@ -343,9 +343,22 @@ tr:hover td{background:var(--paper);}
         <div class="actions">
           <button class="primary" id="btnConfirmarSalida">Generar salida</button>
           <button class="ghost" id="btnCancelarSalida" type="button">Cancelar</button>
+          <button class="ghost" id="btnGenerarRemision" type="button" style="display:none;">Abrir remisión</button>
           <span class="spinner" id="spinSalida"></span>
         </div>
         <div class="msg" id="msgSalida"></div>
+      </div>
+      <div class="panel">
+        <h2>Carga masiva de salidas</h2>
+        <p class="hint">Use una fila por producto. Para seriales diligencie Serial; para inventario por cantidad deje Serial vacío y diligencie Referencia y Cantidad.</p>
+        <div class="actions">
+          <input id="archivoSalidasMasivo" type="file" accept=".csv,.txt,text/csv,text/plain">
+          <button class="primary" id="btnCargarSalidasMasivo" type="button">Cargar salidas</button>
+          <button class="ghost" id="btnPlantillaSalidas" type="button">Descargar plantilla</button>
+          <span class="spinner" id="spinSalidasMasivo"></span>
+        </div>
+        <div class="msg" id="msgSalidasMasivo"></div>
+        <div id="resultadoSalidasMasivo" class="hint"></div>
       </div>
     </section>
 
@@ -392,9 +405,9 @@ tr:hover td{background:var(--paper);}
         <table>
           <thead><tr>
             <th class="mono-col">Serial</th><th class="mono-col">Referencia</th><th>Última ubicación</th>
-            <th>Destino</th><th>Documento</th><th>Fecha salida</th>
+            <th>Unidades</th><th>Destino</th><th>Documento</th><th>Fecha salida</th><th>Remisión</th>
           </tr></thead>
-          <tbody id="tblHistorial"><tr class="empty-row"><td colspan="6">Cargando...</td></tr></tbody>
+          <tbody id="tblHistorial"><tr class="empty-row"><td colspan="8">Cargando...</td></tr></tbody>
         </table>
       </div>
     </section>
@@ -404,10 +417,12 @@ tr:hover td{background:var(--paper);}
 
 <script>
 // ============ CONEXIÓN AL BACKEND (Apps Script vía JSONP) ============
-const API_URL = 'https://script.google.com/macros/s/AKfycbzOJd_DXSoSPjEuvYVx2OXGwfCHydFbe9bf-knJ8qeJP4wAgbv5dd92j1I82n_lUKN2OQ/exec';
+const API_URL = 'https://script.google.com/macros/s/AKfycbzNEIRphyqYvQVB-kpePdLI3jxfgqS3NIVGex4rLFtrxBn9y0oTsLu2GJfo53uF4WmxDg/exec';
 
 let jsonpSeq = 0;
-function apiCall(params){
+let inventarioCache = [], inventarioCacheAt = 0, inventarioPromise = null;
+let historialCache = [], historialCacheAt = 0, historialPromise = null;
+function apiCallUnaVez(params){
   return new Promise((resolve, reject)=>{
     const cbName = 'wmsCb_' + (jsonpSeq++) + '_' + Date.now();
     const script = document.createElement('script');
@@ -434,6 +449,39 @@ function apiCall(params){
     document.body.appendChild(script);
   });
 }
+async function apiCall(params, intentos=2){
+  let ultimoError;
+  for(let intento=1; intento<=intentos; intento++){
+    try{return await apiCallUnaVez(params)}catch(err){
+      ultimoError=err;
+      if(/Acción no reconocida|obligatorio|Saldo insuficiente|no está activo|no hay productos|Faltan encabezados/i.test(err.message)) throw err;
+      if(intento<intentos) await new Promise(resolve=>setTimeout(resolve, 700*intento));
+    }
+  }
+  throw ultimoError;
+}
+async function cargarInventario(force=false){
+  const vigente=!force && inventarioCacheAt && (Date.now()-inventarioCacheAt < 30000);
+  if(vigente) return inventarioCache;
+  if(inventarioPromise) return inventarioPromise;
+  inventarioPromise=apiCall({action:'inventario'}).then(res=>{
+    inventarioCache=(res.data||[]).map(normalizarProducto);
+    inventarioCacheAt=Date.now();
+    return inventarioCache;
+  }).finally(()=>{inventarioPromise=null;});
+  return inventarioPromise;
+}
+async function cargarHistorial(force=false){
+  const vigente=!force && historialCacheAt && (Date.now()-historialCacheAt < 30000);
+  if(vigente) return historialCache;
+  if(historialPromise) return historialPromise;
+  historialPromise=apiCall({action:'historial'}).then(res=>{
+    historialCache=(res.data||[]).map(normalizarSalida);
+    historialCacheAt=Date.now();
+    return historialCache;
+  }).finally(()=>{historialPromise=null;});
+  return historialPromise;
+}
 
 // Normaliza filas del backend (encabezados en mayúscula) al formato usado en el front
 function normalizarProducto(r){
@@ -441,11 +489,11 @@ function normalizarProducto(r){
     serial: String(r.Serial ?? '').trim(),
     referencia: String(r.Referencia ?? '').trim(),
     descripcion: String(r.Descripcion ?? '').trim(),
-    cantidad: r.Cantidad || 1,
+    cantidad: Number(r.Cantidad) > 0 ? Number(r.Cantidad) : 1,
     zona: String(r.Zona ?? '').trim(),
     pasillo: String(r.Pasillo ?? '').trim(),
     nivel: String(r.Nivel ?? '').trim(),
-    estado: String(r.Estado ?? '').trim(),
+    estado: String(r.Estado ?? '').trim().toLowerCase(),
     fechaIngreso: r.FechaIngreso || '',
     fechaSalida: r.FechaSalida || '',
     destino: String(r.Destino ?? '').trim(),
@@ -454,13 +502,13 @@ function normalizarProducto(r){
 }
 function normalizarSalida(r){
   return {
-    serial: r.Serial || '',
-    referencia: r.Referencia || '',
-    ubicacionSalida: r.Ubicacion || r.UbicacionSalida || '',
-    cantidad: r.Cantidad || 1,
-    destino: r.Destino || '',
-    documento: r.Documento || '',
-    observaciones: r.Observaciones || '',
+    serial: String(r.Serial ?? '').trim(),
+    referencia: String(r.Referencia ?? '').trim(),
+    ubicacionSalida: String(r.Ubicacion ?? r.UbicacionSalida ?? '').trim(),
+    cantidad: Number(r.Unidades ?? r.Cantidad ?? 1) || 1,
+    destino: String(r.Destino ?? '').trim(),
+    documento: String(r.Documento ?? '').trim(),
+    observaciones: String(r.Observaciones ?? '').trim(),
     fechaSalida: r.Fecha || r.FechaSalida || ''
   };
 }
@@ -528,8 +576,8 @@ document.getElementById('btnIngresar').addEventListener('click', async ()=>{
   const nivel = document.getElementById('in-nivel').value.trim();
   const observaciones = document.getElementById('in-obs').value.trim();
 
-  if(!serial || !referencia || !zona){
-    showMsg('msgIngreso', 'Completa serial, referencia y zona.', 'err');
+  if(!referencia || !zona){
+    showMsg('msgIngreso', 'Completa referencia y zona. El serial es opcional para inventario por cantidad.', 'err');
     return;
   }
 
@@ -578,7 +626,7 @@ function parseCsvMasivo(text){
     throw new Error('Encabezados inválidos. Use: Serial,Referencia,Descripcion,Cantidad,Zona,Pasillo,Nivel,Observaciones');
   }
   return rows.map((r,i)=>({
-    linea:i+2, serial:r[0]||'', referencia:r[1]||'', descripcion:r[2]||'', cantidad:parseInt(r[3],10)||1,
+    linea:i+2, serial:r[0]||'', referencia:r[1]||'', descripcion:r[2]||'', cantidad:Math.max(1, Number(String(r[3]||'').replace(',','.')) || 1),
     zona:r[4]||'', pasillo:r[5]||'', nivel:r[6]||'', observaciones:r[7]||''
   }));
 }
@@ -597,7 +645,7 @@ document.getElementById('btnCargarMasivo').addEventListener('click', async ()=>{
     const filas = parseCsvMasivo(await file.text());
     let ok=0, errores=[];
     for(const fila of filas){
-      if(!fila.serial || !fila.referencia || !fila.zona){ errores.push('Línea '+fila.linea+': serial, referencia y zona son obligatorios.'); continue; }
+      if(!fila.referencia || !fila.zona || fila.cantidad<=0){ errores.push('Línea '+fila.linea+': referencia, cantidad válida y zona son obligatorias. El serial es opcional.'); continue; }
       try{
         await apiCall({action:'ingresar', serial:fila.serial, referencia:fila.referencia, descripcion:fila.descripcion, cantidad:fila.cantidad, zona:fila.zona, pasillo:fila.pasillo, nivel:fila.nivel, observaciones:fila.observaciones});
         ok++;
@@ -605,16 +653,15 @@ document.getElementById('btnCargarMasivo').addEventListener('click', async ()=>{
     }
     document.getElementById('resultadoMasivo').innerHTML = '<b>'+ok+'</b> ingresados de '+filas.length+'.' + (errores.length ? '<br><b>'+errores.length+' con error:</b><br>'+errores.map(e=>e.replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))).join('<br>') : '');
     showMsg('msgMasivo', errores.length ? 'Carga terminada con observaciones.' : 'Carga masiva completada correctamente.','ok');
-    input.value=''; renderUltimos();
+    input.value=''; renderUltimos(true);
   }catch(err){ showMsg('msgMasivo',err.message,'err'); document.getElementById('resultadoMasivo').textContent=''; }
   finally{ setBusy('spinMasivo', ['btnCargarMasivo','btnPlantillaMasiva'], false); }
 });
 
-async function renderUltimos(){
+async function renderUltimos(force=false){
   const tbody = document.getElementById('tblUltimos');
   try{
-    const res = await apiCall({action:'inventario'});
-    const activos = (res.data || []).map(normalizarProducto);
+    const activos = await cargarInventario(force);
     document.getElementById('cIngreso').textContent = activos.length;
     const ultimos = [...activos].sort((a,b)=> new Date(b.fechaIngreso) - new Date(a.fechaIngreso)).slice(0,8);
     if(!ultimos.length){
@@ -623,16 +670,16 @@ async function renderUltimos(){
     }
     tbody.innerHTML = ultimos.map(p=>`
       <tr>
-        <td class="mono">${p.serial}</td>
-        <td class="mono">${p.referencia}</td>
-        <td>${p.descripcion||'—'}</td>
+        <td class="mono">${escapeHtml(p.serial||'—')}</td>
+        <td class="mono">${escapeHtml(p.referencia||'—')}</td>
+        <td>${escapeHtml(p.descripcion||'—')}</td>
         <td><span class="loc-tag">${ubicacionTexto(p)}</span></td>
-        <td>${p.cantidad}</td>
-        <td>${fmtDate(p.fechaIngreso)}</td>
+        <td>${escapeHtml(p.cantidad)}</td>
+        <td>${escapeHtml(fmtDate(p.fechaIngreso))}</td>
         <td><span class="badge ok">En bodega</span></td>
       </tr>`).join('');
   }catch(err){
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="7">Error cargando datos: '+err.message+'</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="7">Error cargando datos: '+escapeHtml(err.message)+'</td></tr>';
   }
 }
 
@@ -647,23 +694,23 @@ async function runSearch(term){
     const matches = (res.data || []).map(normalizarProducto)
       .sort((a,b)=> new Date(b.fechaIngreso) - new Date(a.fechaIngreso));
     if(!matches.length){
-      box.innerHTML = '<div class="panel"><p class="sub" style="margin:0;">No se encontraron productos con "'+term+'".</p></div>';
+      box.innerHTML = '<div class="panel"><p class="sub" style="margin:0;">No se encontraron productos con "'+escapeHtml(term)+'".</p></div>';
       return;
     }
     box.innerHTML = matches.map(p=>`
       <div class="result-card">
         <div class="result-main">
-          <div class="serial">${p.serial}</div>
-          <div class="ref">${p.referencia} ${p.descripcion? '· '+p.descripcion : ''}</div>
+          <div class="serial">${escapeHtml(p.serial||'(sin serial)')}</div>
+          <div class="ref">${escapeHtml(p.referencia)} ${p.descripcion? '· '+escapeHtml(p.descripcion) : ''}</div>
         </div>
         <div class="result-meta">
-          <div><span>Ubicación</span>${p.estado==='En bodega' ? '<span class="loc-tag">'+ubicacionTexto(p)+'</span>' : '—'}</div>
+          <div><span>Ubicación</span>${p.estado==='en bodega' ? '<span class="loc-tag">'+ubicacionTexto(p)+'</span>' : '—'}</div>
           <div><span>Cantidad</span>${p.cantidad}</div>
           <div><span>Ingreso</span>${fmtDate(p.fechaIngreso)}</div>
-          ${p.estado!=='En bodega' ? '<div><span>Salida</span>'+fmtDate(p.fechaSalida)+'</div>' : ''}
+          ${p.estado!=='en bodega' ? '<div><span>Salida</span>'+fmtDate(p.fechaSalida)+'</div>' : ''}
         </div>
         <div class="result-side">
-          ${p.estado==='En bodega' ? '<span class="badge ok">En bodega</span><button class="ghost small btn-reubicar" data-serial="'+encodeURIComponent(p.serial)+'" type="button">Reubicar</button>' : '<span class="badge warn">Despachado</span>'}
+          ${p.estado==='en bodega' ? '<span class="badge ok">En bodega</span><button class="ghost small btn-reubicar" data-serial="'+encodeURIComponent(p.serial)+'" type="button">Reubicar</button>' : '<span class="badge warn">Despachado</span>'}
         </div>
       </div>`).join('');
   }catch(err){
@@ -695,14 +742,27 @@ document.getElementById('btnConfirmarReubicacion').addEventListener('click', asy
   try{const r=await apiCall({action:'reubicar',serial,zona,pasillo,nivel});showMsg('msgReubicacion',r.mensaje||'Producto reubicado correctamente.','ok');document.getElementById('reubicacionForm').style.display='none';runSearch(document.getElementById('searchInput').value)}catch(err){showMsg('msgReubicacion',err.message,'err')}finally{setBusy('spinReubicacion',['btnConfirmarReubicacion','btnCancelarReubicacion'],false)}
 });
 
-// ---- SALIDA MÚLTIPLE ----
-let salidaTargets = [];
+// ---- SALIDA MÚLTIPLE Y REMISIÓN ----
+let salidaTargets = [], remisionActual = null;
+function imprimirRemision(){
+  if(!remisionActual)return;
+  const fecha=new Date().toLocaleString('es-CO'), filas=remisionActual.productos.map((p,i)=>`<tr><td>${i+1}</td><td>${escapeHtml(p.serial||'SIN SERIAL')}</td><td>${escapeHtml(p.referencia||'')}</td><td>${escapeHtml(p.descripcion||'')}</td><td>${escapeHtml(ubicacionTexto(p)||'—')}</td><td>${escapeHtml(p.unidades||p.cantidadSalida||p.cantidad||1)}</td></tr>`).join('');
+  const w=window.open('','_blank','width=950,height=750');
+  w.document.write(`<!doctype html><html lang="es"><head><meta charset="utf-8"><title>Remisión ${escapeHtml(remisionActual.documento||'')}</title><style>body{font-family:Arial;color:#111;margin:35px}h1{text-align:center;font-size:24px}h2{font-size:16px;border-bottom:1px solid #222;padding-bottom:6px}.head{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:20px 0}.line{border-bottom:1px solid #aaa;min-height:25px}table{width:100%;border-collapse:collapse;margin-top:15px}th,td{border:1px solid #777;padding:8px;font-size:12px}th{background:#eee}.firmas{display:grid;grid-template-columns:1fr 1fr;gap:80px;margin-top:100px}.firma{border-top:1px solid #111;padding-top:8px;min-height:65px}.small{font-size:12px}.pdf-actions{text-align:center;margin:22px 0}@media print{.pdf-actions{display:none}}button{background:#1d4ed8;color:#fff;border:0;border-radius:5px;padding:10px 18px;font-weight:700;cursor:pointer}<\/style></head><body><h1>REMISIÓN DE PRODUCTOS</h1><div class="head"><div><b>Documento:</b> ${escapeHtml(remisionActual.documento||'—')}</div><div><b>Fecha de salida:</b> ${fecha}</div><div><b>Destino / cliente:</b> ${escapeHtml(remisionActual.destino)}</div><div><b>Observaciones:</b> ${escapeHtml(remisionActual.observaciones||'—')}</div></div><h2>Detalle de la salida</h2><table><thead><tr><th>#</th><th>Serial</th><th>Referencia</th><th>Descripción</th><th>Ubicación</th><th>Unidades</th></tr></thead><tbody>${filas}</tbody></table><div class="firmas"><div><div class="firma"><b>RECIBE A CONFORMIDAD</b><br><br>Nombre: ___________________________________<br>CC: ______________________________________<br>Fecha: ____________________________________</div></div><div><div class="firma"><b>RESPONSABLE IMC</b><br><br>Nombre: ___________________________________<br>Cargo: ____________________________________<br>Firma: ____________________________________</div></div></div><p class="small">Documento generado por WMS Control por Serial.</p><div class="pdf-actions"><button onclick="window.print()">Imprimir / Guardar como PDF</button></div><\/body><\/html>`);w.document.close();
+}
+document.getElementById('btnGenerarRemision').addEventListener('click',imprimirRemision);
+function imprimirRemisionDatos(remision){
+  const anterior=remisionActual;
+  remisionActual=remision;
+  imprimirRemision();
+  remisionActual=anterior;
+}
 function serialesEntrada(){
   return [...new Set(document.getElementById('salidaSearch').value.split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean))];
 }
 function escapeHtml(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));}
 function actualizarSeleccion(){
-  salidaTargets = [...document.querySelectorAll('.salida-check:checked')].map(c=>JSON.parse(c.dataset.producto));
+  salidaTargets = [...document.querySelectorAll('.salida-check:checked')].map(c=>{const p=JSON.parse(c.dataset.producto);const q=c.closest('.result-card').querySelector('.salida-cantidad');const max=Number(p.cantidad)>0?Number(p.cantidad):1; p.cantidadSalida=q?Math.min(max,Math.max(1,parseInt(q.value,10)||1)):max; return p});
   document.getElementById('salidaSerialTag').textContent = salidaTargets.length ? salidaTargets.length+' serial(es) seleccionado(s)' : '';
   document.getElementById('salidaForm').style.display = salidaTargets.length ? 'block' : 'none';
 }
@@ -712,13 +772,15 @@ async function buscarParaSalida(){
   if(!seriales.length){ box.innerHTML=''; return; }
   box.innerHTML = '<div class="panel"><p class="sub" style="margin:0;">Buscando seriales...</p></div>';
   try{
-    const inventarioRes = await apiCall({action:'inventario'});
-    const activos = (inventarioRes.data||[]).map(normalizarProducto);
-    const resultados = seriales.map(serial=>activos.find(r=>r.serial.toUpperCase()===serial.toUpperCase() && r.estado.toLowerCase()==='en bodega'));
+    const activos = await cargarInventario();
+    const resultados = seriales.map(termino=>activos.find(r=>{
+      const activo=r.estado.toLowerCase()==='en bodega';
+      return activo && ((r.serial && r.serial.toUpperCase()===termino.toUpperCase()) || (!r.serial && r.referencia.toUpperCase()===termino.toUpperCase()));
+    }));
     const encontrados = resultados.filter(Boolean), noEncontrados = seriales.filter((s,i)=>!resultados[i]);
     if(!encontrados.length){ box.innerHTML='<div class="panel"><p class="sub" style="margin:0;">No se encontraron seriales activos en bodega.</p></div>'; return; }
-    box.innerHTML = '<div class="panel"><h2>Seleccione los productos para la misma salida</h2>' + encontrados.map((p,i)=>`<label class="result-card" style="cursor:pointer"><input class="salida-check" type="checkbox" data-producto='${JSON.stringify(p).replace(/'/g,'&#039;')}' checked> <div class="result-main"><div class="serial">${escapeHtml(p.serial)}</div><div class="ref">${escapeHtml(p.referencia)} ${p.descripcion?'· '+escapeHtml(p.descripcion):''}</div></div><div class="result-meta"><div><span>Ubicación</span><span class="loc-tag">${escapeHtml(ubicacionTexto(p))}</span></div><div><span>Cantidad</span>${escapeHtml(p.cantidad)}</div></div></label>`).join('') + (noEncontrados.length?'<p class="hint">No encontrados o ya despachados: '+noEncontrados.map(escapeHtml).join(', ')+'</p>':'') + '</div>';
-    document.querySelectorAll('.salida-check').forEach(c=>c.addEventListener('change', actualizarSeleccion));
+    box.innerHTML = '<div class="panel"><h2>Seleccione los productos para la misma salida</h2>' + encontrados.map((p,i)=>`<label class="result-card" style="cursor:pointer"><input class="salida-check" type="checkbox" data-producto='${JSON.stringify(p).replace(/'/g,'&#039;')}' checked> <div class="result-main"><div class="serial">${escapeHtml(p.serial||'(sin serial)')}</div><div class="ref">${escapeHtml(p.referencia)} ${p.descripcion?'· '+escapeHtml(p.descripcion):''}</div></div><div class="result-meta"><div><span>Ubicación</span><span class="loc-tag">${escapeHtml(ubicacionTexto(p))}</span></div><div><span>Disponible</span>${escapeHtml(p.cantidad)}</div>${!p.serial?'<div><span>Cantidad a sacar</span><input class="salida-cantidad" type="number" min="1" max="'+escapeHtml(p.cantidad)+'" value="1" style="width:85px"></div>':''}</div></label>`).join('') + (noEncontrados.length?'<p class="hint">No encontrados o ya despachados: '+noEncontrados.map(escapeHtml).join(', ')+'</p>':'') + '</div>';
+    document.querySelectorAll('.salida-check,.salida-cantidad').forEach(c=>c.addEventListener('change', actualizarSeleccion));
     actualizarSeleccion();
   }catch(err){ box.innerHTML='<div class="panel"><p class="sub" style="margin:0;color:var(--danger);">Error: '+escapeHtml(err.message)+'</p></div>'; }
 }
@@ -731,22 +793,170 @@ document.getElementById('btnConfirmarSalida').addEventListener('click', async ()
   setBusy('spinSalida',['btnConfirmarSalida','btnCancelarSalida'],true);
   try{
     let r;
-    try{
-      r=await apiCall({action:'salidaMultiple',seriales:salidaTargets.map(p=>p.serial).join('|'),destino,documento,observaciones});
-    }catch(batchError){
-      if(!/salidamultiple|acción no reconocida/i.test(batchError.message)) throw batchError;
-      for(const producto of salidaTargets){
-        await apiCall({action:'salida',serial:producto.serial,destino,documento,observaciones});
+    const haySinSerial=salidaTargets.some(p=>!p.serial);
+    if(!haySinSerial){
+      try{r=await apiCall({action:'salidaMultiple',seriales:salidaTargets.map(p=>p.serial).join('|'),destino,documento,observaciones});}
+      catch(batchError){
+        if(!/salidamultiple|acción no reconocida/i.test(batchError.message)) throw batchError;
+        for(const producto of salidaTargets) await apiCall({action:'salida',serial:producto.serial,destino,documento,observaciones});
+        r={mensaje:salidaTargets.length+' salida(s) generada(s) correctamente.'};
       }
-      r={mensaje:salidaTargets.length+' salida(s) generada(s) correctamente.'};
+    }else{
+      for(const producto of salidaTargets){
+        if(producto.serial) await apiCall({action:'salida',serial:producto.serial,destino,documento,observaciones});
+        else await apiCall({action:'salidaCantidad',referencia:producto.referencia,cantidad:producto.cantidadSalida,destino,documento,observaciones});
+      }
+      r={mensaje:'Salida(s) procesada(s) correctamente.'};
     }
-    showMsg('msgSalida',r.mensaje||'Salidas generadas correctamente.','ok'); document.getElementById('salidaForm').style.display='none';document.getElementById('salidaResult').innerHTML='';document.getElementById('salidaSearch').value='';['out-destino','out-doc','out-obs'].forEach(id=>document.getElementById(id).value='');salidaTargets=[];renderUltimos();
+    remisionActual={productos:salidaTargets.map(p=>({...p,unidades:p.serial?(Number(p.cantidad)||1):(Number(p.cantidadSalida)||1)})),destino,documento,observaciones};document.getElementById('btnGenerarRemision').style.display='inline-block';showMsg('msgSalida',r.mensaje||'Salidas generadas correctamente. Puedes imprimir la remisión.','ok'); document.getElementById('salidaForm').style.display='block';document.getElementById('salidaResult').innerHTML='';document.getElementById('salidaSearch').value='';['out-destino','out-doc','out-obs'].forEach(id=>document.getElementById(id).value='');salidaTargets=[];renderUltimos(true);
   }catch(err){showMsg('msgSalida',err.message,'err')}finally{setBusy('spinSalida',['btnConfirmarSalida','btnCancelarSalida'],false)}
 });
 document.getElementById('btnCancelarSalida').addEventListener('click',()=>{document.getElementById('salidaForm').style.display='none';salidaTargets=[]});
 
+// ---- CARGA MASIVA DE SALIDAS ----
+function descargarRemisionDatos(remision, indice){
+  const html=construirRemisionHtml(remision);
+  const base=String(remision.documento||('pedido_'+indice)).replace(/[^a-z0-9_-]+/gi,'_');
+  const nombre='remision_'+indice+'_'+base+'.html';
+  const blob=new Blob([html],{type:'text/html;charset=utf-8'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');a.href=url;a.download=nombre;document.body.appendChild(a);a.click();a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
+function renderRemisionesMasivas(remisiones){
+  const box=document.getElementById('resultadoSalidasMasivo');
+  if(!remisiones.length)return;
+  const html=remisiones.map((r,i)=>`<div class="result-card">
+    <div class="result-main"><div class="serial">Pedido ${i+1}: ${escapeHtml(r.documento||'Sin documento')}</div>
+    <div class="ref">Cliente/destino: ${escapeHtml(r.destino||'—')} · ${r.productos.length} línea(s) · ${r.totalUnidades} unidad(es)</div></div>
+    <div class="result-side"><button class="primary small btn-remision-masiva" data-remision-index="${i}" type="button">Imprimir remisión</button></div>
+  </div>`).join('');
+  box.insertAdjacentHTML('beforeend','<div class="panel"><h2>Remisiones de pedidos procesados</h2><p class="hint">Se generó una remisión independiente por cada documento y destino.</p>'+html+'</div>');
+  box.querySelectorAll('.btn-remision-masiva').forEach(btn=>btn.addEventListener('click',()=>{
+    const r=remisiones[Number(btn.dataset.remisionIndex)];
+    imprimirRemisionDatos(r);
+  }));
+}
+
+function parseSalidasMasivas(text){
+  text=text.replace(/^\uFEFF/,'').replace(/\r\n?/g,'\n');
+  const first=text.split('\n')[0]||'', delimiter=first.split(';').length>first.split(',').length?';':(first.includes('\t')?'\t':',');
+  const rows=[];let row=[],cell='',quoted=false;
+  for(let i=0;i<text.length;i++){const ch=text[i],next=text[i+1];if(ch==='"'&&quoted&&next==='"'){cell+='"';i++;continue}if(ch==='"'){quoted=!quoted;continue}if(ch===delimiter&&!quoted){row.push(cell.trim());cell='';continue}if(ch==='\n'&&!quoted){row.push(cell.trim());if(row.some(v=>v!==''))rows.push(row);row=[];cell='';continue}cell+=ch}
+  if(cell!==''||row.length){row.push(cell.trim());if(row.some(v=>v!==''))rows.push(row)}
+  if(rows.length<2)throw new Error('El archivo no contiene filas de salidas.');
+  const norm=v=>v.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim();
+  const headers=rows.shift().map(norm),expected=['serial','referencia','cantidad','destino','documento','observaciones'];
+  if(headers.length!==expected.length||expected.some((h,i)=>headers[i]!==h))throw new Error('Encabezados inválidos. Use: Serial,Referencia,Cantidad,Destino,Documento,Observaciones');
+  return rows.map((r,i)=>({linea:i+2,serial:r[0]||'',referencia:r[1]||'',cantidad:Math.max(1, Number(String(r[2]||'').replace(',','.')) || 1),destino:r[3]||'',documento:r[4]||'',observaciones:r[5]||''}));
+}
+document.getElementById('btnPlantillaSalidas').addEventListener('click',()=>{
+  const csv='Serial,Referencia,Cantidad,Destino,Documento,Observaciones\nSN001,,1,Cliente ABC,FACT-001,Despacho\n,REF-15600,600,Cliente ABC,FACT-001,Salida parcial\n';
+  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8;'}));a.download='plantilla_salidas_masivas.csv';a.click();URL.revokeObjectURL(a.href);
+});
+document.getElementById('btnCargarSalidasMasivo').addEventListener('click', async()=>{
+  const input=document.getElementById('archivoSalidasMasivo'), file=input.files[0];
+  if(!file){showMsg('msgSalidasMasivo','Selecciona un archivo CSV o plano.','err');return;}
+  setBusy('spinSalidasMasivo',['btnCargarSalidasMasivo','btnPlantillaSalidas'],true);
+  const resumen=document.getElementById('resultadoSalidasMasivo');
+  resumen.textContent='Agrupando pedidos...';
+
+  try{
+    const filas=parseSalidasMasivas(await file.text());
+    const grupos=new Map();
+    const errores=[];
+
+    // El mismo documento representa una única salida, aunque aparezca en varias filas.
+    // Cada documento diferente genera una salida independiente.
+    // Si el documento está vacío, cada fila queda como salida independiente.
+    filas.forEach(f=>{
+      if((!f.serial&&!f.referencia)||!f.destino||f.cantidad<=0){
+        errores.push('Línea '+f.linea+': indique serial o referencia, cantidad y destino.');
+        return;
+      }
+      const documento=f.documento.trim();
+      const clave=documento ? 'DOC|' + documento.toUpperCase() : 'LINEA|' + f.linea;
+      if(!grupos.has(clave)) grupos.set(clave, {documento, destino:f.destino.trim(), filas:[]});
+      grupos.get(clave).filas.push(f);
+    });
+
+    let gruposOk=0, filasOk=0;
+    const remisionesProcesadas=[];
+    for(const grupo of grupos.values()){
+      resumen.textContent='Procesando pedido '+(gruposOk+1)+' de '+grupos.size+'...';
+      const serialRows=grupo.filas.filter(f=>f.serial);
+      const cantidadRows=grupo.filas.filter(f=>!f.serial);
+      let grupoConError=false;
+
+      try{
+        // Todos los seriales del mismo documento salen en una sola operación.
+        if(serialRows.length){
+          await apiCall({
+            action:'salidaMultiple',
+            seriales:serialRows.map(f=>f.serial).join('|'),
+            destino:grupo.destino,
+            documento:grupo.documento,
+            observaciones:serialRows.map(f=>f.observaciones).filter(Boolean).join(' | ')
+          });
+          filasOk += serialRows.length;
+        }
+
+        // Las unidades sin serial se descuentan por referencia, conservando
+        // el mismo documento y destino del pedido agrupado.
+        for(const f of cantidadRows){
+          await apiCall({
+            action:'salidaCantidad',
+            referencia:f.referencia,
+            cantidad:f.cantidad,
+            destino:grupo.destino,
+            documento:grupo.documento,
+            observaciones:f.observaciones
+          });
+          filasOk++;
+        }
+        const productosRemision=grupo.filas.map(f=>({
+          serial:f.serial,
+          referencia:f.referencia,
+          descripcion:'',
+          cantidad:Number(f.cantidad)||1,
+          unidades:Number(f.cantidad)||1,
+          cantidadSalida:Number(f.cantidad)||1,
+          zona:'',pasillo:'',nivel:''
+        }));
+        remisionesProcesadas.push({
+          productos:productosRemision,
+          destino:grupo.destino,
+          documento:grupo.documento,
+          observaciones:grupo.filas.map(f=>f.observaciones).filter(Boolean).join(' | '),
+          totalUnidades:productosRemision.reduce((sum,p)=>sum+p.unidades,0)
+        });
+        gruposOk++;
+      }catch(err){
+        grupoConError=true;
+        const lineas=grupo.filas.map(f=>f.linea).join(', ');
+        errores.push('Pedido '+(grupo.documento||'sin documento')+' / '+grupo.destino+' (líneas '+lineas+'): '+err.message);
+      }
+
+      if(grupoConError && serialRows.length && cantidadRows.length){
+        // El error se informa como grupo para evitar repetir salidas parciales.
+      }
+    }
+
+    resumen.innerHTML='<b>'+filasOk+'</b> fila(s) procesadas en <b>'+gruposOk+'</b> pedido(s) agrupado(s) de '+filas.length+'.'+
+      (errores.length?'<br><b>'+errores.length+' con error:</b><br>'+errores.map(escapeHtml).join('<br>'):'');
+    showMsg('msgSalidasMasivo',errores.length?'Carga terminada con observaciones.':'Pedidos agrupados y procesados correctamente.','ok');
+    input.value='';
+    renderRemisionesMasivas(remisionesProcesadas);
+    renderUltimos(true);
+  }catch(err){
+    showMsg('msgSalidasMasivo',err.message,'err');
+    resumen.textContent='';
+  }finally{
+    setBusy('spinSalidasMasivo',['btnCargarSalidasMasivo','btnPlantillaSalidas'],false);
+  }
+});
+
 // ---- INVENTARIO ----
-let inventarioCache = [];
 function poblarZonas(){
   const sel = document.getElementById('filterZona');
   const actual = sel.value;
@@ -780,24 +990,23 @@ function pintarInventario(){
   }
   tbody.innerHTML = list.map(p=>`
     <tr>
-      <td class="mono">${p.serial}</td>
-      <td class="mono">${p.referencia}</td>
-      <td>${p.descripcion||'—'}</td>
+      <td class="mono">${escapeHtml(p.serial||'—')}</td>
+      <td class="mono">${escapeHtml(p.referencia||'—')}</td>
+      <td>${escapeHtml(p.descripcion||'—')}</td>
       <td><span class="loc-tag">${ubicacionTexto(p)}</span></td>
-      <td>${p.cantidad}</td>
-      <td>${fmtDate(p.fechaIngreso)}</td>
+      <td>${escapeHtml(p.cantidad)}</td>
+      <td>${escapeHtml(fmtDate(p.fechaIngreso))}</td>
       <td><button class="ghost small" onclick="irASalida('${p.serial}')">Dar salida</button></td>
     </tr>`).join('');
 }
-async function renderInventario(){
+async function renderInventario(force=false){
   const tbody = document.getElementById('tblInventario');
-  tbody.innerHTML = '<tr class="empty-row"><td colspan="7">Cargando...</td></tr>';
+  tbody.innerHTML = '<tr class="empty-row"><td colspan="8">Cargando...</td></tr>';
   try{
-    const res = await apiCall({action:'inventario'});
-    inventarioCache = (res.data || []).map(normalizarProducto);
+    await cargarInventario(force);
     pintarInventario();
   }catch(err){
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="7">Error cargando datos: '+err.message+'</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="7">Error cargando datos: '+escapeHtml(err.message)+'</td></tr>';
   }
 }
 window.irASalida = function(serial){
@@ -807,7 +1016,7 @@ window.irASalida = function(serial){
 };
 document.getElementById('filterInv').addEventListener('input', pintarInventario);
 document.getElementById('filterZona').addEventListener('change', pintarInventario);
-document.getElementById('btnRefreshInv').addEventListener('click', renderInventario);
+document.getElementById('btnRefreshInv').addEventListener('click', ()=>renderInventario(true));
 
 document.getElementById('btnExportInv').addEventListener('click', ()=>{
   if(!inventarioCache.length){ alert('No hay inventario para exportar.'); return; }
@@ -822,49 +1031,63 @@ document.getElementById('btnExportInv').addEventListener('click', ()=>{
 });
 
 // ---- HISTORIAL ----
-let historialCache = [];
 function pintarHistorial(){
   const term = document.getElementById('filterHist').value.trim().toUpperCase();
   let list = historialCache;
   if(term) list = list.filter(p =>
     p.serial.toUpperCase().includes(term) || p.referencia.toUpperCase().includes(term) ||
-    (p.destino||'').toUpperCase().includes(term)
+    (p.destino||'').toUpperCase().includes(term) ||
+    (p.documento||'').toUpperCase().includes(term)
   );
   list = list.sort((a,b)=> new Date(b.fechaSalida) - new Date(a.fechaSalida));
 
   const tbody = document.getElementById('tblHistorial');
   if(!list.length){
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="6">Todavía no se han generado salidas.</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="8">Todavía no se han generado salidas.</td></tr>';
     return;
   }
   tbody.innerHTML = list.map(p=>`
     <tr>
-      <td class="mono">${p.serial}</td>
-      <td class="mono">${p.referencia}</td>
+      <td class="mono">${escapeHtml(p.serial||'—')}</td>
+      <td class="mono">${escapeHtml(p.referencia||'—')}</td>
       <td><span class="loc-tag">${p.ubicacionSalida||'—'}</span></td>
-      <td>${p.destino||'—'}</td>
-      <td class="mono">${p.documento||'—'}</td>
+      <td>${p.cantidad || 1}</td>
+      <td>${escapeHtml(p.destino||'—')}</td>
+      <td class="mono">${escapeHtml(p.documento||'—')}</td>
       <td>${fmtDate(p.fechaSalida)}</td>
+      <td><button class="ghost small btn-reimprimir-hist" data-historial-index="${historialCache.indexOf(p)}" type="button">Imprimir</button></td>
     </tr>`).join('');
 }
-async function renderHistorial(){
+function imprimirRemisionHistorial(indice){
+  const fila=historialCache[Number(indice)];
+  if(!fila)return;
+  const productos=historialCache.filter(p=>fila.documento ? p.documento===fila.documento : p===fila).map(p=>({
+    serial:p.serial, referencia:p.referencia, descripcion:'', unidades:p.cantidad||1,
+    cantidad:p.cantidad||1, cantidadSalida:p.cantidad||1, zona:p.ubicacionSalida||'', pasillo:'', nivel:''
+  }));
+  imprimirRemisionDatos({productos,destino:fila.destino,documento:fila.documento,observaciones:productos.length>1?'Reimpresión de remisión':'',});
+}
+document.getElementById('tblHistorial').addEventListener('click',e=>{
+  const btn=e.target.closest('.btn-reimprimir-hist');
+  if(btn) imprimirRemisionHistorial(btn.dataset.historialIndex);
+});
+async function renderHistorial(force=false){
   const tbody = document.getElementById('tblHistorial');
-  tbody.innerHTML = '<tr class="empty-row"><td colspan="6">Cargando...</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="7">Cargando...</td></tr>';
   try{
-    const res = await apiCall({action:'historial'});
-    historialCache = (res.data || []).map(normalizarSalida);
+    await cargarHistorial(force);
     pintarHistorial();
   }catch(err){
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="6">Error cargando datos: '+err.message+'</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="7">Error cargando datos: '+escapeHtml(err.message)+'</td></tr>';
   }
 }
 document.getElementById('filterHist').addEventListener('input', pintarHistorial);
-document.getElementById('btnRefreshHist').addEventListener('click', renderHistorial);
+document.getElementById('btnRefreshHist').addEventListener('click', ()=>renderHistorial(true));
 
 document.getElementById('btnExportHist').addEventListener('click', ()=>{
   if(!historialCache.length){ alert('No hay historial para exportar.'); return; }
   const filas = historialCache.map(p=>({
-    Serial:p.serial, Referencia:p.referencia, UltimaUbicacion:p.ubicacionSalida,
+    Serial:p.serial, Referencia:p.referencia, UltimaUbicacion:p.ubicacionSalida, Unidades:p.cantidad || 1,
     Destino:p.destino||'', Documento:p.documento||'', Observaciones:p.observaciones||'', FechaSalida:fmtDate(p.fechaSalida)
   }));
   const ws = XLSX.utils.json_to_sheet(filas);
